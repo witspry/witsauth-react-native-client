@@ -18,7 +18,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && tsc -p tsconfig.build.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm test && pnpm build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "react-native",
