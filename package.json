@@ -1,6 +1,6 @@
 {
   "name": "@witsauth/react-native-client",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Official React Native client library (Expo and Bare React Native CLI) for integrating WitsAuth OAuth 2.0 + PKCE authentication on Android and iOS.",
   "main": "./dist/index.umd.js",
   "module": "./dist/index.es.js",
