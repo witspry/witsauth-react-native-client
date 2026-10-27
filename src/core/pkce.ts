@@ -156,18 +156,75 @@ export function base64UrlEncode(bytes: Uint8Array): string {
   return result;
 }
 
-function getRandomBytes(length: number): Uint8Array {
+export function getRandomBytes(length: number): Uint8Array {
   const array = new Uint8Array(length);
   const g = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
   if (g?.crypto && typeof g.crypto.getRandomValues === 'function') {
     g.crypto.getRandomValues(array);
     return array;
   }
-  // Fallback for bare Hermes environments without global.crypto.getRandomValues
-  for (let i = 0; i < length; i++) {
-    array[i] = Math.floor(Math.random() * 256);
+
+  try {
+    const req = typeof g?.require === 'function' ? g.require : undefined;
+    if (req) {
+      const expoCrypto = req('expo-crypto');
+      if (expoCrypto && typeof expoCrypto.getRandomValues === 'function') {
+        expoCrypto.getRandomValues(array);
+        return array;
+      }
+      if (expoCrypto && typeof expoCrypto.getRandomBytes === 'function') {
+        const bytes: Uint8Array = expoCrypto.getRandomBytes(length);
+        array.set(bytes.subarray(0, length));
+        return array;
+      }
+    }
+  } catch {
+    // expo-crypto not installed
   }
-  return array;
+
+  throw new Error(
+    'Cryptographically secure random number generator (CSPRNG) is unavailable. Please install and import "react-native-get-random-values" or "expo-crypto".'
+  );
+}
+
+function base64UrlDecodeToUtf8(input: string): string {
+  const base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+
+  if (typeof atob === 'function') {
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    if (typeof TextDecoder !== 'undefined') {
+      return new TextDecoder().decode(bytes);
+    }
+    let out = '';
+    for (let i = 0; i < bytes.length; i++) {
+      out += String.fromCharCode(bytes[i]);
+    }
+    return decodeURIComponent(escape(out));
+  }
+
+  const g = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
+  if (g?.Buffer) {
+    return g.Buffer.from(padded, 'base64').toString('utf8');
+  }
+
+  throw new Error('Unable to decode base64url string.');
+}
+
+export function decodeJwtPayload<T = Record<string, unknown>>(token: string | null | undefined): T | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const json = base64UrlDecodeToUtf8(parts[1]);
+    return JSON.parse(json) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function generateRandomString(length: number = 64): string {

@@ -33,4 +33,20 @@ describe('PKCE Utilities (Hermes-Compatible S256)', () => {
     const asyncChallenge = await createCodeChallenge(rfcVerifier);
     expect(asyncChallenge).toBe(expectedChallenge);
   });
+
+  it('throws a descriptive security error if CSPRNG is unavailable instead of falling back to Math.random()', () => {
+    const originalCrypto = globalThis.crypto;
+    try {
+      Object.defineProperty(globalThis, 'crypto', {
+        value: undefined,
+        configurable: true
+      });
+      expect(() => generateCodeVerifier()).toThrow(/Cryptographically secure random number generator/);
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', {
+        value: originalCrypto,
+        configurable: true
+      });
+    }
+  });
 });

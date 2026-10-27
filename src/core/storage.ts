@@ -102,8 +102,13 @@ export function createMemoryStorageAdapter(): OAuth2AsyncStorage {
   };
 }
 
+const EXPO_SECURE_STORE_CHUNK_SIZE = 2000;
+const CHUNK_MANIFEST_PREFIX = '__witsauth_chunked__:';
+
 /**
  * Helper to create a storage adapter backed by `expo-secure-store`.
+ * Automatically splits values exceeding 2000 bytes across indexed chunk keys
+ * to prevent Expo SecureStore's 2048-byte limit errors on large JWTs.
  * Pass the imported `SecureStore` module from `expo-secure-store`.
  */
 export function createExpoSecureStoreAdapter(secureStoreModule: {
@@ -111,10 +116,65 @@ export function createExpoSecureStoreAdapter(secureStoreModule: {
   setItemAsync: (key: string, value: string) => Promise<void>;
   deleteItemAsync: (key: string) => Promise<void>;
 }): OAuth2AsyncStorage {
+  const deleteChunksIfPresent = async (key: string): Promise<void> => {
+    try {
+      const existing = await secureStoreModule.getItemAsync(key);
+      if (existing && existing.startsWith(CHUNK_MANIFEST_PREFIX)) {
+        const count = parseInt(existing.slice(CHUNK_MANIFEST_PREFIX.length), 10);
+        if (Number.isFinite(count) && count > 0) {
+          const deletions: Promise<void>[] = [];
+          for (let i = 0; i < count; i++) {
+            deletions.push(secureStoreModule.deleteItemAsync(`${key}__chunk_${i}`));
+          }
+          await Promise.all(deletions);
+        }
+      }
+    } catch {
+      // Ignore cleanup read errors
+    }
+  };
+
   return {
-    getItem: (key: string) => secureStoreModule.getItemAsync(key),
-    setItem: (key: string, value: string) => secureStoreModule.setItemAsync(key, value),
-    removeItem: (key: string) => secureStoreModule.deleteItemAsync(key)
+    getItem: async (key: string) => {
+      const raw = await secureStoreModule.getItemAsync(key);
+      if (!raw) return null;
+      if (raw.startsWith(CHUNK_MANIFEST_PREFIX)) {
+        const count = parseInt(raw.slice(CHUNK_MANIFEST_PREFIX.length), 10);
+        if (!Number.isFinite(count) || count <= 0) return null;
+        const chunkPromises: Promise<string | null>[] = [];
+        for (let i = 0; i < count; i++) {
+          chunkPromises.push(secureStoreModule.getItemAsync(`${key}__chunk_${i}`));
+        }
+        const chunks = await Promise.all(chunkPromises);
+        if (chunks.some((c) => c === null || c === undefined)) {
+          return null;
+        }
+        return chunks.join('');
+      }
+      return raw;
+    },
+    setItem: async (key: string, value: string) => {
+      if (value.length <= EXPO_SECURE_STORE_CHUNK_SIZE) {
+        await deleteChunksIfPresent(key);
+        await secureStoreModule.setItemAsync(key, value);
+        return;
+      }
+
+      await deleteChunksIfPresent(key);
+      const chunks: string[] = [];
+      for (let offset = 0; offset < value.length; offset += EXPO_SECURE_STORE_CHUNK_SIZE) {
+        chunks.push(value.slice(offset, offset + EXPO_SECURE_STORE_CHUNK_SIZE));
+      }
+
+      await Promise.all(
+        chunks.map((chunk, index) => secureStoreModule.setItemAsync(`${key}__chunk_${index}`, chunk))
+      );
+      await secureStoreModule.setItemAsync(key, `${CHUNK_MANIFEST_PREFIX}${chunks.length}`);
+    },
+    removeItem: async (key: string) => {
+      await deleteChunksIfPresent(key);
+      await secureStoreModule.deleteItemAsync(key);
+    }
   };
 }
 

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthClient } from './AuthClient';
-import { createMemoryStorageAdapter } from './storage';
+import { createExpoSecureStoreAdapter, createMemoryStorageAdapter } from './storage';
 import { BrowserSessionLauncher, OAuth2NativeConfig, STORAGE_KEYS } from '../models/types';
+import { base64UrlEncode } from './pkce';
 
 describe('AuthClient (@witsauth/react-native-client)', () => {
   let memoryStorage: ReturnType<typeof createMemoryStorageAdapter>;
@@ -159,5 +160,76 @@ describe('AuthClient (@witsauth/react-native-client)', () => {
     expect(firstCallBody).toContain('token=ref-token-1');
     expect(firstCallBody).toContain('token_type_hint=refresh_token');
     expect(firstCallBody).toContain('client_id=rn-mobile-client');
+  });
+
+  it('exposes getIdToken() and getUserProfile() from decoded ID token claims', async () => {
+    const header = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
+    const payloadObj = {
+      sub: 'usr_12345',
+      email: 'mobile@example.com',
+      phone_number: '+14155552671',
+      phone_number_verified: true,
+      amr: ['sms', 'otp']
+    };
+    const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payloadObj)));
+    const fakeIdToken = `${header}.${payload}.sig`;
+
+    await memoryStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, 'acc-token-1');
+    await memoryStorage.setItem(STORAGE_KEYS.ID_TOKEN, fakeIdToken);
+    await memoryStorage.setItem(STORAGE_KEYS.TOKEN_EXPIRES_AT, String(Date.now() + 3600000));
+
+    const client = new AuthClient(config);
+    await client.initialize();
+
+    expect(client.getIdToken()).toBe(fakeIdToken);
+    expect(client.getUserProfile()).toEqual(payloadObj);
+  });
+
+  it('supports prompt parameter in buildAuthorizationUrl() and authorize()', async () => {
+    const client = new AuthClient(config);
+    const url = await client.buildAuthorizationUrl({ prompt: 'select_account' });
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get('prompt')).toBe('select_account');
+  });
+
+  it('launches logoutEndpoint in system browser when logout({ clearBrowserSession: true }) is called', async () => {
+    config.logoutEndpoint = 'https://auth.witspry.com/auth/logout';
+    mockOpenAuthSession.mockResolvedValue({ type: 'dismiss' });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 200 }));
+
+    const client = new AuthClient(config);
+    await client.logout({ clearBrowserSession: true });
+
+    expect(mockOpenAuthSession).toHaveBeenCalledWith(
+      'https://auth.witspry.com/auth/logout?client_id=rn-mobile-client&redirect_uri=myapp%3A%2F%2Fauth%2Fcallback',
+      'myapp://auth/callback'
+    );
+  });
+
+  it('transparently chunks and reassembles values > 2000 bytes in createExpoSecureStoreAdapter()', async () => {
+    const backingStore = new Map<string, string>();
+    const adapter = createExpoSecureStoreAdapter({
+      getItemAsync: async (k) => backingStore.get(k) ?? null,
+      setItemAsync: async (k, v) => {
+        if (v.length > 2048) {
+          throw new Error('Value exceeds Expo SecureStore 2048 byte limit');
+        }
+        backingStore.set(k, v);
+      },
+      deleteItemAsync: async (k) => {
+        backingStore.delete(k);
+      }
+    });
+
+    const largeJwt = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.' + 'a'.repeat(4500) + '.signature';
+    await adapter.setItem(STORAGE_KEYS.ACCESS_TOKEN, largeJwt);
+
+    expect(backingStore.get(STORAGE_KEYS.ACCESS_TOKEN)).toBe('__witsauth_chunked__:3');
+    const retrieved = await adapter.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    expect(retrieved).toBe(largeJwt);
+
+    await adapter.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+    expect(await adapter.getItem(STORAGE_KEYS.ACCESS_TOKEN)).toBeNull();
+    expect(backingStore.size).toBe(0);
   });
 });

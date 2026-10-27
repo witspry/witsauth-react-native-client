@@ -1,5 +1,12 @@
-import { OAuth2NativeConfig, STORAGE_KEYS, TokenInfo } from '../models/types';
-import { createCodeChallenge, generateCodeVerifier, generateState } from './pkce';
+import {
+  AuthorizeOptions,
+  LogoutOptions,
+  OAuth2NativeConfig,
+  STORAGE_KEYS,
+  TokenInfo,
+  UserProfile
+} from '../models/types';
+import { createCodeChallenge, decodeJwtPayload, generateCodeVerifier, generateState } from './pkce';
 import { NativeTokenStorage } from './storage';
 import { parseCallbackUrl } from './browser';
 
@@ -34,7 +41,7 @@ export class AuthClient {
   /**
    * Builds the OAuth 2.0 + PKCE authorization URL and persists `code_verifier`, `state`, and `nonce`.
    */
-  async buildAuthorizationUrl(): Promise<string> {
+  async buildAuthorizationUrl(options?: AuthorizeOptions): Promise<string> {
     await this.storage.hydrate();
 
     const verifier = generateCodeVerifier();
@@ -63,8 +70,12 @@ export class AuthClient {
       }
     }
 
-    if (this.config.scope) params.append('scope', this.config.scope);
-    if (this.config.audience) params.append('audience', this.config.audience);
+    const effectiveScope = options?.scope ?? this.config.scope;
+    const effectiveAudience = options?.audience ?? this.config.audience;
+
+    if (effectiveScope) params.append('scope', effectiveScope);
+    if (effectiveAudience) params.append('audience', effectiveAudience);
+    if (options?.prompt) params.append('prompt', options.prompt);
 
     return `${this.config.authorizationEndpoint}?${params.toString()}`;
   }
@@ -73,14 +84,14 @@ export class AuthClient {
    * Launches the system authentication browser (`ASWebAuthenticationSession` on iOS / Chrome Custom Tabs on Android),
    * intercepts the deep-link callback (`redirectUri`), validates `state`, and exchanges `code` + `code_verifier` for tokens.
    */
-  async authorize(): Promise<TokenInfo> {
+  async authorize(options?: AuthorizeOptions): Promise<TokenInfo> {
     if (!this.config.openAuthSession) {
       throw new Error(
         'No openAuthSession launcher configured. Pass createExpoWebBrowserLauncher(WebBrowser) or createInAppBrowserLauncher(InAppBrowser) in OAuth2NativeConfig.'
       );
     }
 
-    const authUrl = await this.buildAuthorizationUrl();
+    const authUrl = await this.buildAuthorizationUrl(options);
     const sessionResult = await this.config.openAuthSession(authUrl, this.config.redirectUri);
 
     if (sessionResult.type !== 'success' || !sessionResult.url) {
@@ -252,6 +263,15 @@ export class AuthClient {
     return this.storage.getItemSync(STORAGE_KEYS.ACCESS_TOKEN);
   }
 
+  getIdToken(): string | null {
+    return this.storage.getItemSync(STORAGE_KEYS.ID_TOKEN);
+  }
+
+  getUserProfile<T extends UserProfile = UserProfile>(): T | null {
+    const token = this.getIdToken() || this.getAccessToken();
+    return decodeJwtPayload<T>(token);
+  }
+
   getRefreshToken(): string | null {
     return this.storage.getItemSync(STORAGE_KEYS.REFRESH_TOKEN);
   }
@@ -314,8 +334,10 @@ export class AuthClient {
 
   /**
    * Clears tokens from secure storage and revokes both refresh_token and access_token at `revokeEndpoint`.
+   * If `options.clearBrowserSession` is true and `logoutEndpoint` + `openAuthSession` are configured,
+   * launches the system browser to terminate the WitsAuth web session cookie.
    */
-  async logout(): Promise<void> {
+  async logout(options?: LogoutOptions): Promise<void> {
     await this.storage.hydrate();
     const accessToken = this.getAccessToken();
     const refreshToken = await this.storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
@@ -343,6 +365,20 @@ export class AuthClient {
         } catch (err) {
           this.log('error', 'Failed to revoke token during logout', err);
         }
+      }
+    }
+
+    if (options?.clearBrowserSession && this.config.logoutEndpoint && this.config.openAuthSession) {
+      const params = new URLSearchParams({
+        client_id: this.config.clientId,
+        redirect_uri: this.config.redirectUri
+      });
+      const separator = this.config.logoutEndpoint.includes('?') ? '&' : '?';
+      const logoutUrl = `${this.config.logoutEndpoint}${separator}${params.toString()}`;
+      try {
+        await this.config.openAuthSession(logoutUrl, this.config.redirectUri);
+      } catch (err) {
+        this.log('warn', 'Browser logout session dismissed or failed', err);
       }
     }
   }

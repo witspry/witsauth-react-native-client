@@ -1,14 +1,16 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { AuthClient } from '../core/AuthClient';
-import { OAuth2NativeConfig } from '../models/types';
+import { AuthorizeOptions, LogoutOptions, OAuth2NativeConfig, UserProfile } from '../models/types';
 
 export interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   accessToken: string | null;
+  idToken: string | null;
+  user: UserProfile | null;
   error: Error | null;
-  login: () => Promise<void>;
-  logout: () => Promise<void>;
+  login: (options?: AuthorizeOptions) => Promise<void>;
+  logout: (options?: LogoutOptions) => Promise<void>;
   getToken: () => Promise<string | null>;
   navigateToAccountManagement: () => Promise<void>;
   authClient: AuthClient;
@@ -45,6 +47,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [idToken, setIdToken] = useState<string | null>(null);
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -53,6 +57,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
     if (authClient.isAuthenticated()) {
       setIsAuthenticated(true);
       setAccessToken(authClient.getAccessToken());
+      setIdToken(authClient.getIdToken());
+      setUser(authClient.getUserProfile());
       return;
     }
 
@@ -61,16 +67,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         const tokenInfo = await authClient.refreshAccessToken();
         setIsAuthenticated(true);
         setAccessToken(tokenInfo.accessToken);
+        setIdToken(authClient.getIdToken());
+        setUser(authClient.getUserProfile());
         return;
       } catch {
         setIsAuthenticated(false);
         setAccessToken(null);
+        setIdToken(null);
+        setUser(null);
         return;
       }
     }
 
     setIsAuthenticated(false);
     setAccessToken(null);
+    setIdToken(null);
+    setUser(null);
   }, [authClient]);
 
   useEffect(() => {
@@ -105,6 +117,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         try {
           const tokenInfo = await authClient.refreshAccessToken();
           setAccessToken(tokenInfo.accessToken);
+          setIdToken(authClient.getIdToken());
+          setUser(authClient.getUserProfile());
           setIsAuthenticated(true);
           scheduleRefresh();
         } catch (err) {
@@ -112,6 +126,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
           if (!authClient.getAccessToken()) {
             setIsAuthenticated(false);
             setAccessToken(null);
+            setIdToken(null);
+            setUser(null);
           } else {
             timeoutId = setTimeout(scheduleRefresh, 30000);
           }
@@ -135,35 +151,45 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
     };
   }, [isAuthenticated, authClient, subscribeAppState, syncAuthState]);
 
-  const login = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const tokenInfo = await authClient.authorize();
-      setAccessToken(tokenInfo.accessToken);
-      setIsAuthenticated(true);
-      onLoginSuccess?.();
-    } catch (err) {
-      const authErr = err instanceof Error ? err : new Error('Authentication failed');
-      setError(authErr);
-      onLoginError?.(authErr);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [authClient, onLoginSuccess, onLoginError]);
+  const login = useCallback(
+    async (options?: AuthorizeOptions) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const tokenInfo = await authClient.authorize(options);
+        setAccessToken(tokenInfo.accessToken);
+        setIdToken(authClient.getIdToken());
+        setUser(authClient.getUserProfile());
+        setIsAuthenticated(true);
+        onLoginSuccess?.();
+      } catch (err) {
+        const authErr = err instanceof Error ? err : new Error('Authentication failed');
+        setError(authErr);
+        onLoginError?.(authErr);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [authClient, onLoginSuccess, onLoginError]
+  );
 
-  const logout = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      await authClient.logout();
-      setIsAuthenticated(false);
-      setAccessToken(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Logout failed'));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [authClient]);
+  const logout = useCallback(
+    async (options?: LogoutOptions) => {
+      setIsLoading(true);
+      try {
+        await authClient.logout(options);
+        setIsAuthenticated(false);
+        setAccessToken(null);
+        setIdToken(null);
+        setUser(null);
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Logout failed'));
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [authClient]
+  );
 
   const getToken = useCallback(async (): Promise<string | null> => {
     await authClient.initialize();
@@ -173,11 +199,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
     try {
       const info = await authClient.refreshAccessToken();
       setAccessToken(info.accessToken);
+      setIdToken(authClient.getIdToken());
+      setUser(authClient.getUserProfile());
       setIsAuthenticated(true);
       return info.accessToken;
     } catch {
       setIsAuthenticated(false);
       setAccessToken(null);
+      setIdToken(null);
+      setUser(null);
       return null;
     }
   }, [authClient]);
@@ -194,6 +224,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         isAuthenticated,
         isLoading,
         accessToken,
+        idToken,
+        user,
         error,
         login,
         logout,

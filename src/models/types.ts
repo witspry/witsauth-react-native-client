@@ -114,6 +114,36 @@ export interface TokenInfo {
   idToken?: string;
 }
 
+export interface UserProfile {
+  sub?: string;
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
+  email_verified?: boolean;
+  phone_number?: string;
+  phone_number_verified?: boolean;
+  roles?: string[];
+  permissions?: string[];
+  amr?: string[];
+  act?: {
+    sub: string;
+    ticket_ref?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface AuthorizeOptions {
+  prompt?: 'login' | 'consent' | 'select_account';
+  scope?: string;
+  audience?: string;
+}
+
+export interface LogoutOptions {
+  clearBrowserSession?: boolean;
+}
+
 export const STORAGE_KEYS = {
   ACCESS_TOKEN: 'witsauth_access_token',
   REFRESH_TOKEN: 'witsauth_refresh_token',
